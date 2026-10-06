@@ -57,6 +57,12 @@ input[type=text],input[type=number],input[type=date],input[type=email],input[typ
 input:focus,select:focus{border-color:#2563eb}
 select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239ca3af' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:32px}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.pair{display:flex;align-items:center;gap:6px}
+.pair > select,.pair > input{flex:1;min-width:0}
+.pair-sep{font-weight:700;color:#9ca3af}
+.pair-unit{font-size:12px;font-weight:600;color:#9ca3af}
+input.invalid,input.invalid:focus{border-color:#dc2626;background:#fef2f2}
+.form-error{display:none;background:#fef2f2;color:#dc2626;border-radius:10px;padding:10px 14px;font-size:13px;margin-top:12px;line-height:1.5}
 
 /* ── Buttons ── */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:none;border-radius:11px;font-weight:700;cursor:pointer;transition:opacity .15s,transform .1s;white-space:nowrap;font-size:13px;padding:10px 16px}
@@ -283,7 +289,7 @@ select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/
       </div>
       <div class="field">
         <label class="label">Begintijd</label>
-        <input type="time" id="edit-start"/>
+        <div id="edit-start-wrap"></div>
       </div>
       <div class="field">
         <label class="label">Klant</label>
@@ -301,20 +307,24 @@ select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/
         </select>
       </div>
       <div class="field">
-        <label class="label">Uren</label>
-        <input type="number" id="edit-hours" min="0" step="0.25" placeholder="2.5"/>
+        <label class="label">Duur</label>
+        <div class="pair">
+          <input type="number" id="edit-dh" min="0" step="1" inputmode="numeric" placeholder="0" oninput="updateEditTotal()"/><span class="pair-unit">u</span>
+          <input type="number" id="edit-dm" min="0" max="59" step="1" inputmode="numeric" placeholder="0" oninput="updateEditTotal()"/><span class="pair-unit">m</span>
+        </div>
       </div>
       <div class="field" id="edit-rate-field">
         <label class="label">Uurtarief (€)</label>
-        <input type="number" id="edit-rate" min="0" placeholder="85"/>
+        <input type="number" id="edit-rate" min="0" placeholder="85" oninput="updateEditTotal()"/>
       </div>
     </div>
     <div class="field" style="margin-bottom:12px">
       <label class="label">Omschrijving</label>
       <input type="text" id="edit-desc" placeholder="Optioneel…"/>
     </div>
+    <div id="edit-err" class="form-error" style="margin:0 0 12px"></div>
     <div id="edit-total-preview" style="margin-bottom:16px;padding:10px 12px;border-radius:10px;background:#f0fdf4;color:#15803d;font-size:15px;font-weight:800"></div>
-    <button class="btn btn-primary btn-full btn-lg" onclick="saveEdit()">Opslaan</button>
+    <button id="edit-save" class="btn btn-primary btn-full btn-lg" onclick="saveEdit()">Opslaan</button>
   </div>
 </div>
 
@@ -650,6 +660,36 @@ function renderPage(name) {
 // ══════════════════════════════════════════════════════════ HELPERS
 const uid  = () => Math.random().toString(36).slice(2,8);
 const today = () => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
+const timeInputHTML = (hId, mId, hVal, mVal, onH, onM) =>
+  `<div class="pair"><input type="number" id="${hId}" inputmode="numeric" min="0" max="23" step="1" value="${hVal}" placeholder="uu" oninput="${onH}"/><span class="pair-sep">:</span><input type="number" id="${mId}" inputmode="numeric" min="0" max="59" step="1" value="${mVal}" placeholder="mm" oninput="${onM}"/></div>`;
+const isInt = (v) => /^\d+$/.test(String(v).trim());
+// Validates start time and duration. startRequired: begintijd must be filled.
+// Returns { ok, errors[], bad{sh,sm,dh,dm} }
+function validateTimeFields(sh, sm, dh, dm, startRequired) {
+  const errors = [], bad = {};
+  const shE = String(sh??"").trim(), smE = String(sm??"").trim();
+  const dhE = String(dh??"").trim(), dmE = String(dm??"").trim();
+  if (shE !== "" && (!isInt(shE) || +shE > 23)) { bad.sh = 1; errors.push("Het uur van de begintijd moet tussen 0 en 23 liggen."); }
+  if (smE !== "" && (!isInt(smE) || +smE > 59)) { bad.sm = 1; errors.push("De minuten van de begintijd moeten tussen 0 en 59 liggen."); }
+  if (shE === "" && smE !== "") { bad.sh = 1; errors.push("Vul ook het uur van de begintijd in."); }
+  if (dhE !== "" && !isInt(dhE)) { bad.dh = 1; errors.push("Het aantal uren moet een heel getal zijn."); }
+  if (dmE !== "" && (!isInt(dmE) || +dmE > 59)) { bad.dm = 1; errors.push("De minuten van de duur moeten tussen 0 en 59 liggen."); }
+  const startFilled = shE !== "";  // empty minutes count as :00
+  const durOk = !bad.dh && !bad.dm && durToHours(dhE, dmE) > 0;
+  const ok = errors.length === 0 && durOk && (!startRequired || startFilled);
+  return { ok, errors, bad };
+}
+function showFieldErrors(res, ids, errId) {
+  Object.entries(ids).forEach(([k,id]) => { const el = document.getElementById(id); if (el) el.classList.toggle("invalid", !!res.bad[k]); });
+  const box = document.getElementById(errId);
+  if (box) { box.innerHTML = res.errors.join("<br>"); box.style.display = res.errors.length ? "block" : "none"; }
+}
+const pad2 = (v) => String(parseInt(v)).padStart(2,"0");
+const durToHours = (h, m) => (parseInt(h)||0) + (parseInt(m)||0)/60;
+const hoursToHM = (hours) => {
+  const totalMin = Math.round((parseFloat(hours)||0)*60);
+  return { h: Math.floor(totalMin/60), m: totalMin%60 };
+};
 const entryKey = (e) => {
   // Sort key: date + start time (local). Entries without time sort at start of their day.
   const clock = e.startTime ? fmtTime(e.startTime) : "00:00";
@@ -913,12 +953,12 @@ function timerStop() {
 }
 
 // ══════════════════════════════════════════════════════════ INVOER
-let invoerForm = { date:today(), startClock:"", clientId:"", taskId:"", desc:"", hours:"", rate:"", rateType:"hourly", fixedAmount:"" };
+const emptyInvoer = () => ({ date:today(), startH:"", startM:"", clientId:"", taskId:"", desc:"", durH:"", durM:"", rate:"", rateType:"hourly", fixedAmount:"" });
+let invoerForm = emptyInvoer();
 
 function renderInvoer() {
   const f = invoerForm;
   const tasks = clientTasks(f.clientId);
-  const total = f.rateType==="fixed" ? (parseFloat(f.fixedAmount)||0) : (parseFloat(f.hours)||0) * (parseFloat(f.rate)||0);
 
   document.getElementById("page-invoer").innerHTML = `
     <div class="section-head" style="margin-bottom:14px">Uren invoeren</div>
@@ -931,7 +971,7 @@ function renderInvoer() {
         </div>
         <div class="field">
           <label class="label">Begintijd</label>
-          <input type="time" value="${f.startClock}" onchange="invSet('startClock',this.value)"/>
+          ${timeInputHTML("inv-sh","inv-sm",f.startH,f.startM,"invInput('startH',this.value)","invInput('startM',this.value)")}
         </div>
         <div class="field">
           <label class="label">Klant</label>
@@ -953,35 +993,61 @@ function renderInvoer() {
           </select>
         </div>
         <div class="field">
-          <label class="label">Uren</label>
-          <input type="number" min="0" step="0.25" value="${f.hours}" placeholder="2.5" onblur="invSet('hours',this.value)"/>
+          <label class="label">Duur</label>
+          <div class="pair">
+            <input type="number" min="0" step="1" inputmode="numeric" id="inv-dh" value="${f.durH}" placeholder="0" oninput="invInput('durH',this.value)"/><span class="pair-unit">u</span>
+            <input type="number" min="0" max="59" step="1" inputmode="numeric" id="inv-dm" value="${f.durM}" placeholder="0" oninput="invInput('durM',this.value)"/><span class="pair-unit">m</span>
+          </div>
         </div>
         ${f.rateType==="fixed" ? `
         <div class="field">
           <label class="label">Vast bedrag (€)</label>
-          <input type="number" min="0" value="${f.fixedAmount}" placeholder="250" onblur="invSet('fixedAmount',this.value)"/>
+          <input type="number" min="0" value="${f.fixedAmount}" placeholder="250" oninput="invInput('fixedAmount',this.value)"/>
         </div>` : `
         <div class="field">
           <label class="label">Uurtarief (€)</label>
-          <input type="number" min="0" value="${f.rate}" placeholder="85" onblur="invSet('rate',this.value)"/>
+          <input type="number" min="0" value="${f.rate}" placeholder="85" oninput="invInput('rate',this.value)"/>
         </div>`}
         <div class="field">
           <label class="label">Totaal</label>
-          <div style="padding:10px 12px;border-radius:10px;font-size:15px;font-weight:800;${(f.rateType==="fixed"?parseFloat(f.fixedAmount):total)>0?"background:#f0fdf4;color:#15803d":"background:#f9fafb;color:#9ca3af"}">${f.rateType==="fixed"?(parseFloat(f.fixedAmount)>0?euro(f.fixedAmount):"—"):(total>0?euro(total):"—")}</div>
+          <div id="inv-total" style="padding:10px 12px;border-radius:10px;font-size:15px;font-weight:800"></div>
         </div>
       </div>
       <div class="field" style="margin-top:12px">
         <label class="label">Omschrijving</label>
-        <input type="text" id="inv-desc" value="${f.desc}" placeholder="Optioneel…" onblur="invSet('desc',this.value)"/>
+        <input type="text" id="inv-desc" value="${f.desc}" placeholder="Optioneel…" oninput="invInput('desc',this.value)"/>
       </div>
+      <div id="inv-err" class="form-error"></div>
       <div style="margin-top:16px">
-        <button class="btn btn-primary btn-full btn-lg" ${!f.clientId||!f.taskId||!f.hours||!f.startClock?"disabled":""} onclick="invSave()">
+        <button id="inv-save" class="btn btn-primary btn-full btn-lg" onclick="invSave()">
           ${svgIcon("plus",16)} Opslaan
         </button>
       </div>
     </div>
   `;
+  invRefresh();
 }
+
+function invHours(f) { return durToHours(f.durH, f.durM); }
+function invTotal(f) {
+  return f.rateType==="fixed" ? (parseFloat(f.fixedAmount)||0) : invHours(f) * (parseFloat(f.rate)||0);
+}
+function invCheck(f) { return validateTimeFields(f.startH, f.startM, f.durH, f.durM, true); }
+function invValid(f) { return !!(f.clientId && f.taskId && invCheck(f).ok); }
+// Update total and button without re-rendering, so focus stays in the field
+function invRefresh() {
+  const f = invoerForm, t = invTotal(f);
+  const el = document.getElementById("inv-total");
+  if (el) {
+    el.textContent = t > 0 ? euro(t) : "—";
+    el.style.background = t > 0 ? "#f0fdf4" : "#f9fafb";
+    el.style.color = t > 0 ? "#15803d" : "#9ca3af";
+  }
+  showFieldErrors(invCheck(f), {sh:"inv-sh", sm:"inv-sm", dh:"inv-dh", dm:"inv-dm"}, "inv-err");
+  const btn = document.getElementById("inv-save");
+  if (btn) btn.disabled = !invValid(f);
+}
+function invInput(k, v) { invoerForm[k] = v; invRefresh(); }
 
 function invSet(k, v) {
   invoerForm[k] = v;
@@ -996,9 +1062,9 @@ function invSet(k, v) {
 
 function invSave() {
   const f = invoerForm;
-  if (!f.clientId||!f.taskId||!f.hours||!f.startClock) return;
-  const h = parseFloat(f.hours), r = parseFloat(f.rate)||0;
-  const startMs = new Date(f.date + "T" + f.startClock).getTime();
+  if (!invValid(f)) return;
+  const h = invHours(f), r = parseFloat(f.rate)||0;
+  const startMs = new Date(`${f.date}T${pad2(f.startH)}:${pad2(f.startM||0)}`).getTime();
   const isFixed = f.rateType === "fixed";
   const fixedAmt = parseFloat(f.fixedAmount)||0;
   const total = isFixed ? fixedAmt : parseFloat((h*r).toFixed(2));
@@ -1010,7 +1076,7 @@ function invSave() {
     total,
     startTime: startMs, endTime: startMs + Math.round(h*3600)*1000 });
   scheduleSave();
-  invoerForm = { date:today(), startClock:"", clientId:"", taskId:"", desc:"", hours:"", rate:"", rateType:"hourly", fixedAmount:"" };
+  invoerForm = emptyInvoer();
   renderInvoer();
   // flash feedback
   const btn = document.querySelector("#page-invoer .btn-primary");
@@ -1245,8 +1311,11 @@ function openEdit(id) {
   editClientChange(e.taskId);
 
   document.getElementById("edit-date").value = e.date;
-  document.getElementById("edit-start").value = e.startTime ? fmtTime(e.startTime) : "";
-  document.getElementById("edit-hours").value = e.hours;
+  const st = e.startTime ? fmtTime(e.startTime).split(":") : ["",""];
+  document.getElementById("edit-start-wrap").innerHTML = timeInputHTML("edit-sh","edit-sm",st[0],st[1],"updateEditTotal()","updateEditTotal()");
+  const hm = hoursToHM(e.hours);
+  document.getElementById("edit-dh").value = hm.h;
+  document.getElementById("edit-dm").value = hm.m;
   document.getElementById("edit-rate").value = e.rate || "";
   document.getElementById("edit-desc").value = e.desc || "";
   document.getElementById("edit-ratetype").value = e.rateType || "hourly";
@@ -1278,8 +1347,16 @@ function editRatetypeChange(entry) {
   updateEditTotal();
 }
 
+function editCheck() {
+  const g = (id) => document.getElementById(id)?.value ?? "";
+  return validateTimeFields(g("edit-sh"), g("edit-sm"), g("edit-dh"), g("edit-dm"), false);
+}
 function updateEditTotal() {
-  const h = parseFloat(document.getElementById("edit-hours")?.value) || 0;
+  const res = editCheck();
+  showFieldErrors(res, {sh:"edit-sh", sm:"edit-sm", dh:"edit-dh", dm:"edit-dm"}, "edit-err");
+  const sb = document.getElementById("edit-save");
+  if (sb) sb.disabled = !res.ok;
+  const h = durToHours(document.getElementById("edit-dh")?.value, document.getElementById("edit-dm")?.value);
   const r = parseFloat(document.getElementById("edit-rate")?.value) || 0;
   const rt = document.getElementById("edit-ratetype")?.value;
   const total = rt === "fixed" ? r : h * r;
@@ -1296,13 +1373,15 @@ function saveEdit() {
   if (!editingId) return;
   const e = DB.entries.find(x=>x.id===editingId);
   if (!e) return;
-  const h = parseFloat(document.getElementById("edit-hours").value) || e.hours;
+  if (!editCheck().ok) { updateEditTotal(); return; }
+  const h = durToHours(document.getElementById("edit-dh").value, document.getElementById("edit-dm").value) || e.hours;
   const r = parseFloat(document.getElementById("edit-rate").value) || 0;
   const rt = document.getElementById("edit-ratetype").value;
   const isFixed = rt === "fixed";
   const total = isFixed ? r : parseFloat((h*r).toFixed(2));
   const newDate = document.getElementById("edit-date").value || e.date;
-  const clock = document.getElementById("edit-start").value;
+  const sh = document.getElementById("edit-sh").value, sm = document.getElementById("edit-sm").value;
+  const clock = sh !== "" ? `${pad2(sh)}:${pad2(sm||0)}` : "";
   const startMs = clock ? new Date(newDate + "T" + clock).getTime() : null;
   DB.entries = DB.entries.map(x => x.id !== editingId ? x : {
     ...x,

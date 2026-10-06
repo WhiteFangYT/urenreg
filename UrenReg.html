@@ -4,6 +4,8 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
 <title>UrenReg</title>
+<meta name="app-version" content="2026-10-06-3"/>
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
 <meta name="theme-color" content="#ffffff"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-status-bar-style" content="default"/>
@@ -234,7 +236,7 @@ input.invalid,input.invalid:focus{border-color:#dc2626;background:#fef2f2}
       </div>
       <div>
         <div class="logo-text">UrenReg</div>
-        <div class="logo-sub">ZZP tijdregistratie</div>
+        <div class="logo-sub">ZZP tijdregistratie · <span id="app-version-label"></span></div>
       </div>
       <button onclick="doLogout()" style="margin-left:auto;margin-right:8px;background:none;border:1.5px solid #e5e7eb;border-radius:8px;padding:4px 10px;font-size:11px;color:#6b7280;cursor:pointer;font-weight:600">Uitloggen</button><div id="sync-badge" class="sync-badge sync-off">
         <span id="sync-dot">⏳</span>
@@ -401,6 +403,15 @@ window._initFirebase = async (cfg) => {
 <script>
 // ══════════════════════════════════════════════════════════ STATE
 const LOCAL_KEY = "zzp_data_v3";
+// Firebase web config is not secret; access is protected by login + Firestore rules.
+const DEFAULT_FIREBASE_CFG = {
+  apiKey: "AIzaSyDTQG-LpF9r_JR-hCIEMqW6s62fYsJs0vE",
+  authDomain: "uren-app-f7aa1.firebaseapp.com",
+  projectId: "uren-app-f7aa1",
+  storageBucket: "uren-app-f7aa1.firebasestorage.app",
+  messagingSenderId: "255173929530",
+  appId: "1:255173929530:web:285b89182e7974a76aa303"
+};
 const CFG_KEY   = "zzp_firebase_cfg";
 
 let DB = { clients:[], entries:[], travel:[] };
@@ -625,14 +636,34 @@ function togglePassVis() {
   }
 }
 
+// ── Auto update ──────────────────────────────────────────────────────────────
+// Fetches the latest file from the server (bypassing cache). If its version
+// differs, reloads via a new URL so the cached copy is skipped.
+const APP_VERSION = document.querySelector('meta[name="app-version"]').content;
+async function checkForUpdate() {
+  try {
+    const res = await fetch(location.pathname + "?check=" + Date.now(), { cache: "no-store" });
+    if (!res.ok) return;
+    const txt = await res.text();
+    const m = txt.match(/<meta name="app-version" content="([^"]+)"/);
+    if (!m || m[1].localeCompare(APP_VERSION, undefined, { numeric: true }) <= 0) return;
+    // Flush any pending save before reloading
+    if (saveTimer && fbEnabled && window._fbSave) {
+      clearTimeout(saveTimer);
+      try { await window._fbSave({ ...DB, _ts: lastLocalSaveTime }); } catch {}
+    }
+    location.replace(location.pathname + "?v=" + encodeURIComponent(m[1]));
+  } catch {}
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") checkForUpdate();
+});
+
 window.addEventListener("load", () => {
-  const saved = localStorage.getItem(CFG_KEY);
-  if (!saved) {
-    document.getElementById("setup").style.display = "block";
-    return;
-  }
-  const cfg = saved === "skip" ? null : JSON.parse(saved);
-  startApp(cfg);
+  const vl = document.getElementById("app-version-label");
+  if (vl) vl.textContent = "v" + APP_VERSION;
+  checkForUpdate();
+  startApp(DEFAULT_FIREBASE_CFG);
 });
 
 // ══════════════════════════════════════════════════════════ ROUTING
